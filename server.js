@@ -1,4 +1,4 @@
-// server.js - Main WhatsApp Bot Server
+// server.js - Modified for Aisensy Integration
 const express = require('express');
 const multer = require('multer');
 const axios = require('axios');
@@ -25,164 +25,170 @@ const geminiAnalyzer = new GeminiColorAnalyzer();
 const conversationManager = new ConversationManager();
 const paymentManager = new PaymentManager();
 
-// WhatsApp API configuration
-const WHATSAPP_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN;
-const WHATSAPP_PHONE_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
-const WEBHOOK_VERIFY_TOKEN = process.env.WEBHOOK_VERIFY_TOKEN;
+// REPLACE THIS SECTION: Aisensy API Configuration (instead of WhatsApp API)
+const AISENSY_API_KEY = process.env.AISENSY_API_KEY;
+const AISENSY_INSTANCE_ID = process.env.AISENSY_INSTANCE_ID;
 
-// WhatsApp API helper functions
-class WhatsAppAPI {
-  static async sendMessage(to, message) {
+// REPLACE: Aisensy API helper functions (replaces WhatsAppAPI class)
+class AisensyAPI {
+  constructor() {
+    this.apiKey = AISENSY_API_KEY;
+    this.instanceId = AISENSY_INSTANCE_ID;
+    this.baseUrl = 'https://backend.aisensy.com/campaign/t1/api/v2';
+  }
+
+  async sendMessage(to, messageData) {
     try {
-      const response = await axios.post(
-        `https://graph.facebook.com/v17.0/${WHATSAPP_PHONE_ID}/messages`,
-        {
-          messaging_product: "whatsapp",
-          to: to,
-          ...message
+      const payload = {
+        apiKey: this.apiKey,
+        campaignName: 'korean_color_analysis',
+        destination: to.replace('+', '').replace(/\s/g, ''), // Clean phone number
+        userName: 'ColorBot',
+        templateParams: [],
+        source: 'whatsapp-bot',
+        media: messageData.media || {},
+        attributes: {
+          name: 'User'
         },
-        {
-          headers: {
-            'Authorization': `Bearer ${WHATSAPP_TOKEN}`,
-            'Content-Type': 'application/json',
-          },
+        message: messageData.message || messageData.text || ''
+      };
+
+      console.log('Sending to Aisensy:', payload);
+
+      const response = await axios.post(`${this.baseUrl}/send`, payload, {
+        headers: {
+          'Content-Type': 'application/json',
+          'X-AiSensy-API-KEY': this.apiKey
         }
-      );
+      });
+
       return response.data;
     } catch (error) {
-      console.error('Error sending WhatsApp message:', error.response?.data || error.message);
+      console.error('Aisensy API error:', error.response?.data || error.message);
       throw error;
     }
   }
 
-  static async sendTextMessage(to, text) {
-    return this.sendMessage(to, {
-      type: "text",
-      text: { body: text }
-    });
+  async sendTextMessage(to, text) {
+    return this.sendMessage(to, { text: text });
   }
 
-  static async sendImageMessage(to, imageUrl, caption = "") {
+  async sendImageMessage(to, imageUrl, caption = "") {
     return this.sendMessage(to, {
-      type: "image",
-      image: {
-        link: imageUrl,
-        caption: caption
+      text: caption,
+      media: {
+        type: 'image',
+        url: imageUrl
       }
     });
   }
 
-  static async sendButtonMessage(to, bodyText, buttons) {
-    return this.sendMessage(to, {
-      type: "interactive",
-      interactive: {
-        type: "button",
-        body: { text: bodyText },
-        action: {
-          buttons: buttons.map((btn, index) => ({
-            type: "reply",
-            reply: {
-              id: btn.id,
-              title: btn.text
-            }
-          }))
+  async sendButtonMessage(to, bodyText, buttons) {
+    // Aisensy might not support interactive buttons the same way
+    // Send as text with options for now
+    const buttonText = buttons.map((btn, index) => 
+      `${index + 1}. ${btn.text}`
+    ).join('\n');
+    
+    const fullMessage = `${bodyText}\n\n${buttonText}\n\nReply with the number of your choice.`;
+    return this.sendTextMessage(to, fullMessage);
+  }
+
+  async sendListMessage(to, bodyText, buttonText, sections) {
+    // Convert list to text format
+    let listText = `${bodyText}\n\n`;
+    
+    sections.forEach(section => {
+      if (section.title) {
+        listText += `**${section.title}**\n`;
+      }
+      section.rows.forEach((row, index) => {
+        listText += `${index + 1}. ${row.title}\n`;
+        if (row.description) {
+          listText += `   ${row.description}\n`;
         }
-      }
+      });
+      listText += '\n';
     });
+    
+    listText += `Reply with the number of your choice.`;
+    return this.sendTextMessage(to, listText);
   }
 
-  static async sendListMessage(to, bodyText, buttonText, sections) {
-    return this.sendMessage(to, {
-      type: "interactive",
-      interactive: {
-        type: "list",
-        body: { text: bodyText },
-        action: {
-          button: buttonText,
-          sections: sections
-        }
-      }
-    });
-  }
-
-  static async downloadMedia(mediaId) {
+  // Aisensy media download (if supported)
+  async downloadMedia(mediaId) {
     try {
-      // Get media URL
-      const mediaResponse = await axios.get(
-        `https://graph.facebook.com/v17.0/${mediaId}`,
-        {
-          headers: {
-            'Authorization': `Bearer ${WHATSAPP_TOKEN}`,
-          },
-        }
-      );
-
-      const mediaUrl = mediaResponse.data.url;
-
-      // Download media content
-      const contentResponse = await axios.get(mediaUrl, {
+      // This would depend on Aisensy's specific media handling
+      // You may need to check their documentation for media download endpoints
+      const response = await axios.get(`${this.baseUrl}/media/${mediaId}`, {
         headers: {
-          'Authorization': `Bearer ${WHATSAPP_TOKEN}`,
+          'X-AiSensy-API-KEY': this.apiKey
         },
         responseType: 'arraybuffer'
       });
 
       return {
-        data: contentResponse.data,
-        contentType: contentResponse.headers['content-type']
+        data: response.data,
+        contentType: response.headers['content-type']
       };
     } catch (error) {
-      console.error('Error downloading media:', error);
+      console.error('Error downloading media from Aisensy:', error);
       throw error;
     }
   }
 }
 
-// Webhook verification
-app.get('/webhook', (req, res) => {
-  const mode = req.query['hub.mode'];
-  const token = req.query['hub.verify_token'];
-  const challenge = req.query['hub.challenge'];
+// Initialize Aisensy API
+const aisensyAPI = new AisensyAPI();
 
-  if (mode === 'subscribe' && token === WEBHOOK_VERIFY_TOKEN) {
-    console.log('Webhook verified successfully!');
-    res.status(200).send(challenge);
-  } else {
-    console.error('Webhook verification failed');
-    res.sendStatus(403);
-  }
+// REPLACE: Aisensy webhook endpoint (replaces Meta webhook verification)
+app.get('/webhook/aisensy', (req, res) => {
+  // Aisensy might have different verification process
+  // Check their documentation for webhook verification
+  res.status(200).send('Webhook verified');
 });
 
-// Main webhook handler
-app.post('/webhook', async (req, res) => {
+// REPLACE: Main webhook handler for Aisensy (replaces Meta webhook handler)
+app.post('/webhook/aisensy', async (req, res) => {
   try {
     const body = req.body;
+    console.log('Aisensy webhook received:', JSON.stringify(body, null, 2));
 
-    if (body.object !== 'whatsapp_business_account') {
-      return res.sendStatus(404);
-    }
+    // Aisensy webhook format (you may need to adjust based on their actual format)
+    if (body.type === 'message' || body.event === 'message') {
+      const message = {
+        id: body.id || body.messageId,
+        from: body.from || body.sender,
+        timestamp: body.timestamp || Date.now(),
+        type: body.messageType || body.type,
+        text: body.messageType === 'text' ? { body: body.text || body.message } : null,
+        image: body.messageType === 'image' ? { 
+          id: body.mediaId,
+          url: body.mediaUrl 
+        } : null,
+        interactive: body.messageType === 'interactive' ? {
+          button_reply: body.buttonReply ? { id: body.buttonReply } : null,
+          list_reply: body.listReply ? { id: body.listReply } : null
+        } : null
+      };
 
-    for (const entry of body.entry) {
-      for (const change of entry.changes) {
-        if (change.field !== 'messages') continue;
-
-        const value = change.value;
-        if (!value.messages) continue;
-
-        for (const message of value.messages) {
-          await handleMessage(message, value.contacts?.[0]);
+      const contact = {
+        profile: { 
+          name: body.senderName || body.userName || 'User' 
         }
-      }
+      };
+
+      await handleMessage(message, contact);
     }
 
     res.sendStatus(200);
   } catch (error) {
-    console.error('Webhook error:', error);
+    console.error('Aisensy webhook error:', error);
     res.sendStatus(500);
   }
 });
 
-// Message handler
+// Message handler (KEEP THIS - just update API calls)
 async function handleMessage(message, contact) {
   const phoneNumber = message.from;
   const messageId = message.id;
@@ -212,7 +218,7 @@ async function handleMessage(message, contact) {
     } else if (message.type === 'interactive') {
       await handleInteractiveMessage(phoneNumber, message.interactive, conversation);
     } else {
-      await WhatsAppAPI.sendTextMessage(
+      await aisensyAPI.sendTextMessage(
         phoneNumber, 
         "I can help you with Korean color analysis! Please send me a clear selfie or type 'start' to begin. ✨"
       );
@@ -223,14 +229,14 @@ async function handleMessage(message, contact) {
 
   } catch (error) {
     console.error('Error handling message:', error);
-    await WhatsAppAPI.sendTextMessage(
+    await aisensyAPI.sendTextMessage(
       phoneNumber, 
       "Sorry, I encountered an error. Please try again or contact support. 🙏"
     );
   }
 }
 
-// Text message handler
+// Text message handler (UPDATE API CALLS)
 async function handleTextMessage(phoneNumber, text, conversation) {
   const lowerText = text.toLowerCase().trim();
 
@@ -256,14 +262,14 @@ async function handleTextMessage(phoneNumber, text, conversation) {
       break;
 
     case 'waiting_for_photo':
-      await WhatsAppAPI.sendTextMessage(
+      await aisensyAPI.sendTextMessage(
         phoneNumber,
         "I'm waiting for your beautiful selfie! 📸 Please take a clear photo following the guidelines I shared earlier."
       );
       break;
 
     case 'analyzing':
-      await WhatsAppAPI.sendTextMessage(
+      await aisensyAPI.sendTextMessage(
         phoneNumber,
         "I'm still analyzing your photo... This usually takes 30-60 seconds. Please wait! ✨"
       );
@@ -283,7 +289,7 @@ async function handleTextMessage(phoneNumber, text, conversation) {
       if (lowerText.includes('paid') || lowerText.includes('payment') || lowerText.includes('done')) {
         await checkPaymentStatus(phoneNumber, conversation);
       } else {
-        await WhatsAppAPI.sendTextMessage(
+        await aisensyAPI.sendTextMessage(
           phoneNumber,
           "Please complete your payment to receive the complete style guide. If you've already paid, type 'paid' to check status. 💳"
         );
@@ -296,10 +302,10 @@ async function handleTextMessage(phoneNumber, text, conversation) {
   }
 }
 
-// Image message handler
+// Image message handler (UPDATE MEDIA HANDLING)
 async function handleImageMessage(phoneNumber, image, conversation) {
   if (conversation.state !== 'waiting_for_photo') {
-    await WhatsAppAPI.sendTextMessage(
+    await aisensyAPI.sendTextMessage(
       phoneNumber,
       "Thanks for the photo! But I'm not ready to analyze it yet. Please type 'start' to begin the process properly. ✨"
     );
@@ -307,16 +313,26 @@ async function handleImageMessage(phoneNumber, image, conversation) {
   }
 
   try {
-    // Download and process the image
-    await WhatsAppAPI.sendTextMessage(
+    await aisensyAPI.sendTextMessage(
       phoneNumber,
       "📸 Got your beautiful photo! Let me analyze your colors... This will take 30-60 seconds. ✨"
     );
 
     conversation.state = 'analyzing';
 
-    // Download the image
-    const mediaData = await WhatsAppAPI.downloadMedia(image.id);
+    // Download the image from Aisensy
+    let mediaData;
+    if (image.url) {
+      // If Aisensy provides direct URL
+      const response = await axios.get(image.url, { responseType: 'arraybuffer' });
+      mediaData = {
+        data: response.data,
+        contentType: response.headers['content-type'] || 'image/jpeg'
+      };
+    } else if (image.id) {
+      // If Aisensy uses media ID system
+      mediaData = await aisensyAPI.downloadMedia(image.id);
+    }
     
     // Create a temporary file
     const tempFileName = `temp_${phoneNumber}_${Date.now()}.jpg`;
@@ -350,7 +366,7 @@ async function handleImageMessage(phoneNumber, image, conversation) {
       await sendAnalysisResults(phoneNumber, analysisResult.analysis);
     } else {
       conversation.state = 'waiting_for_photo';
-      await WhatsAppAPI.sendTextMessage(
+      await aisensyAPI.sendTextMessage(
         phoneNumber,
         `Sorry, I couldn't analyze your photo: ${analysisResult.error}\n\nPlease try with a different photo - make sure it's well-lit and shows your face clearly! 📸`
       );
@@ -359,41 +375,47 @@ async function handleImageMessage(phoneNumber, image, conversation) {
   } catch (error) {
     console.error('Image processing error:', error);
     conversation.state = 'waiting_for_photo';
-    await WhatsAppAPI.sendTextMessage(
+    await aisensyAPI.sendTextMessage(
       phoneNumber,
       "Sorry, there was an issue processing your photo. Please try sending it again! 📸"
     );
   }
 }
 
-// Interactive message handler
+// Interactive message handler (UPDATE FOR SIMPLE TEXT RESPONSES)
 async function handleInteractiveMessage(phoneNumber, interactive, conversation) {
+  // Since Aisensy might not support complex interactive messages,
+  // we'll handle this as text responses
   const buttonId = interactive.button_reply?.id || interactive.list_reply?.id;
 
   switch (buttonId) {
     case 'start_analysis':
+    case '1': // If user replied with number
       await sendPhotoInstructions(phoneNumber);
       conversation.state = 'waiting_for_photo';
       break;
     
     case 'get_pdf':
+    case '2':
       await handlePDFRequest(phoneNumber, conversation);
       break;
     
     case 'new_analysis':
+    case '3':
       await resetAnalysis(phoneNumber, conversation);
       break;
     
     case 'share_results':
+    case '4':
       await shareResults(phoneNumber, conversation);
       break;
 
     default:
-      await WhatsAppAPI.sendTextMessage(phoneNumber, "I didn't understand that option. Please try again! 🤔");
+      await aisensyAPI.sendTextMessage(phoneNumber, "I didn't understand that option. Please try again! 🤔");
   }
 }
 
-// Message templates
+// MESSAGE TEMPLATES (UPDATE ALL aisensyAPI CALLS)
 async function sendWelcomeMessage(phoneNumber) {
   const welcomeText = `✨ Welcome to Korean Color Analysis!
 
@@ -405,11 +427,12 @@ I'm your AI color expert, ready to discover your perfect palette!
 • Makeup & style recommendations
 • Colors to avoid
 
-Ready to discover your true colors? 💖`;
+Ready to discover your true colors? 💖
 
-  await WhatsAppAPI.sendButtonMessage(phoneNumber, welcomeText, [
-    { id: 'start_analysis', text: 'Let\'s Start! ✨' }
-  ]);
+Reply with:
+1. Let's Start! ✨`;
+
+  await aisensyAPI.sendTextMessage(phoneNumber, welcomeText);
 }
 
 async function sendGuideMessage(phoneNumber) {
@@ -430,11 +453,12 @@ async function sendGuideMessage(phoneNumber) {
 • Shadows on face
 • Blurry photos
 
-Ready to take your perfect selfie?`;
+Ready to take your perfect selfie?
 
-  await WhatsAppAPI.sendButtonMessage(phoneNumber, guideText, [
-    { id: 'start_analysis', text: 'I\'m Ready! 📸' }
-  ]);
+Reply with:
+1. I'm Ready! 📸`;
+
+  await aisensyAPI.sendTextMessage(phoneNumber, guideText);
 }
 
 async function sendPhotoInstructions(phoneNumber) {
@@ -448,7 +472,7 @@ Remember:
 
 I'll analyze your colors as soon as you send it! ✨`;
 
-  await WhatsAppAPI.sendTextMessage(phoneNumber, instructions);
+  await aisensyAPI.sendTextMessage(phoneNumber, instructions);
 }
 
 async function sendAnalysisResults(phoneNumber, analysis) {
@@ -461,7 +485,7 @@ ${analysis.personal_profile.summary}
 
 **Your undertone:** ${analysis.personal_profile.undertone}`;
 
-  await WhatsAppAPI.sendTextMessage(phoneNumber, resultText);
+  await aisensyAPI.sendTextMessage(phoneNumber, resultText);
 
   // Key colors
   if (analysis.color_palettes.key_colors?.length) {
@@ -470,7 +494,7 @@ ${analysis.personal_profile.summary}
       .map(color => `${color.name} (${color.hex})`)
       .join('\n• ');
     
-    await WhatsAppAPI.sendTextMessage(phoneNumber, `🎨 **Your Key Colors:**\n• ${keyColors}`);
+    await aisensyAPI.sendTextMessage(phoneNumber, `🎨 **Your Key Colors:**\n• ${keyColors}`);
   }
 
   // Neutrals
@@ -479,7 +503,7 @@ ${analysis.personal_profile.summary}
       .map(color => `${color.name} (${color.hex})`)
       .join('\n• ');
     
-    await WhatsAppAPI.sendTextMessage(phoneNumber, `🤍 **Your Best Neutrals:**\n• ${neutrals}`);
+    await aisensyAPI.sendTextMessage(phoneNumber, `🤍 **Your Best Neutrals:**\n• ${neutrals}`);
   }
 
   // Quick recommendations
@@ -491,7 +515,7 @@ ${analysis.personal_profile.summary}
 **Hair Colors:** ${analysis.recommendations.hair_colors?.slice(0, 3).join(', ')}
 **Jewelry:** ${analysis.recommendations.style?.jewelry}`;
 
-    await WhatsAppAPI.sendTextMessage(phoneNumber, quickRecs);
+    await aisensyAPI.sendTextMessage(phoneNumber, quickRecs);
   }
 
   // Colors to avoid
@@ -501,7 +525,7 @@ ${analysis.personal_profile.summary}
       .map(color => `${color.name} (${color.hex})`)
       .join('\n• ');
     
-    await WhatsAppAPI.sendTextMessage(phoneNumber, `⚠️ **Colors to Use Carefully:**\n• ${avoidColors}`);
+    await aisensyAPI.sendTextMessage(phoneNumber, `⚠️ **Colors to Use Carefully:**\n• ${avoidColors}`);
   }
 
   // Options for next steps
@@ -509,35 +533,20 @@ ${analysis.personal_profile.summary}
 }
 
 async function sendResultsOptions(phoneNumber) {
-  const optionsText = `What would you like to do next? 💖`;
+  const optionsText = `What would you like to do next? 💖
 
-  await WhatsAppAPI.sendListMessage(phoneNumber, optionsText, "Choose Option", [
-    {
-      title: "Next Steps",
-      rows: [
-        {
-          id: "get_pdf",
-          title: "📄 Get Complete Style Guide",
-          description: "15-page PDF with detailed recommendations (₹699)"
-        },
-        {
-          id: "new_analysis",
-          title: "🔄 Analyze Another Photo",
-          description: "Start fresh with a new selfie"
-        },
-        {
-          id: "share_results",
-          title: "📱 Share My Results",
-          description: "Share your color season with friends"
-        }
-      ]
-    }
-  ]);
+1. 📄 Get Complete Style Guide (15-page PDF with detailed recommendations - ₹699)
+2. 🔄 Analyze Another Photo (Start fresh with a new selfie)
+3. 📱 Share My Results (Share your color season with friends)
+
+Reply with the number of your choice.`;
+
+  await aisensyAPI.sendTextMessage(phoneNumber, optionsText);
 }
 
 async function handlePDFRequest(phoneNumber, conversation) {
   if (!conversation.analysis) {
-    await WhatsAppAPI.sendTextMessage(
+    await aisensyAPI.sendTextMessage(
       phoneNumber,
       "Please complete your color analysis first before purchasing the PDF guide! Type 'start' to begin. ✨"
     );
@@ -556,11 +565,11 @@ Get your personalized 15-page PDF including:
 
 This one-time payment gives you everything you need to transform your style! 💫`;
 
-  // Create payment link (you'll need to implement this based on your payment provider)
+  // Create payment link
   const paymentLink = await paymentManager.createPaymentLink(phoneNumber, conversation.analysis);
   
-  await WhatsAppAPI.sendTextMessage(phoneNumber, pdfText);
-  await WhatsAppAPI.sendTextMessage(
+  await aisensyAPI.sendTextMessage(phoneNumber, pdfText);
+  await aisensyAPI.sendTextMessage(
     phoneNumber, 
     `💳 **Pay securely here:** ${paymentLink}\n\nAfter payment, I'll send your complete PDF guide instantly! ✨`
   );
@@ -574,7 +583,7 @@ async function resetAnalysis(phoneNumber, conversation) {
   conversation.analysis = null;
   conversation.paymentLink = null;
   
-  await WhatsAppAPI.sendTextMessage(
+  await aisensyAPI.sendTextMessage(
     phoneNumber,
     "Let's start fresh! 🌟 Ready for your new color analysis?"
   );
@@ -584,7 +593,7 @@ async function resetAnalysis(phoneNumber, conversation) {
 
 async function shareResults(phoneNumber, conversation) {
   if (!conversation.analysis) {
-    await WhatsAppAPI.sendTextMessage(
+    await aisensyAPI.sendTextMessage(
       phoneNumber,
       "Please complete your analysis first! Type 'start' to begin. ✨"
     );
@@ -598,26 +607,22 @@ async function shareResults(phoneNumber, conversation) {
 
 #ColorAnalysis #KoreanColorAnalysis #PersonalColors`;
 
-  await WhatsAppAPI.sendTextMessage(
+  await aisensyAPI.sendTextMessage(
     phoneNumber,
     `Here's a message you can share with friends: 📱\n\n${shareText}`
   );
 }
 
 async function checkPaymentStatus(phoneNumber, conversation) {
-  // Implement payment verification logic here
-  // This would integrate with your payment provider's webhook/API
-  
-  await WhatsAppAPI.sendTextMessage(
+  await aisensyAPI.sendTextMessage(
     phoneNumber,
     "Checking your payment status... Please wait a moment! 🔄"
   );
 
-  // Mock payment check - replace with actual implementation
   const paymentVerified = await paymentManager.verifyPayment(conversation.paymentLink);
   
   if (paymentVerified) {
-    await WhatsAppAPI.sendTextMessage(
+    await aisensyAPI.sendTextMessage(
       phoneNumber,
       "🎉 Payment confirmed! Generating your complete style guide... This will take about 30 seconds."
     );
@@ -625,7 +630,7 @@ async function checkPaymentStatus(phoneNumber, conversation) {
     // Generate and send PDF
     const pdfUrl = await generatePDF(conversation.analysis, phoneNumber);
     
-    await WhatsAppAPI.sendTextMessage(
+    await aisensyAPI.sendTextMessage(
       phoneNumber,
       `📚 Your complete Korean Color Analysis guide is ready! 
 
@@ -639,19 +644,15 @@ Thank you for choosing us! If you love your results, please share with friends! 
     conversation.state = 'completed';
     conversation.pdfGenerated = true;
   } else {
-    await WhatsAppAPI.sendTextMessage(
+    await aisensyAPI.sendTextMessage(
       phoneNumber,
       "I couldn't verify your payment yet. Please try again in a few minutes or contact support if you've already paid. 🙏"
     );
   }
 }
 
-// PDF Generation (integrate with your existing PDF generation logic)
+// PDF Generation (keep this the same)
 async function generatePDF(analysis, phoneNumber) {
-  // Implement PDF generation logic here
-  // This should create a detailed PDF based on the analysis
-  // and return a download URL
-  
   const fileName = `color-analysis-${phoneNumber}-${Date.now()}.pdf`;
   const pdfUrl = `${process.env.BASE_URL}/pdfs/${fileName}`;
   
@@ -660,20 +661,25 @@ async function generatePDF(analysis, phoneNumber) {
   return pdfUrl;
 }
 
-// Health check endpoint
+// Health check endpoint (keep this)
 app.get('/health', (req, res) => {
   res.json({ 
     status: 'healthy', 
     timestamp: new Date().toISOString(),
-    conversations: conversationManager.getActiveConversationsCount()
+    conversations: conversationManager.getActiveConversationsCount(),
+    platform: 'Aisensy'
   });
 });
+
+// Include payment routes
+const paymentRoutes = require('./routes/payment');
+app.use('/', paymentRoutes);
 
 // Start server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🤖 WhatsApp Korean Color Analysis Bot running on port ${PORT}`);
-  console.log(`📱 Webhook URL: ${process.env.BASE_URL}/webhook`);
+  console.log(`🤖 WhatsApp Korean Color Analysis Bot (Aisensy) running on port ${PORT}`);
+  console.log(`📱 Webhook URL: ${process.env.BASE_URL}/webhook/aisensy`);
 });
 
 module.exports = app;
